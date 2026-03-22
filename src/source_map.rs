@@ -51,8 +51,8 @@ impl SourceMap {
             .map(|(i, _)| i)
     }
 
-    /// Return the exact line numbers that have statements (for display).
-    pub fn statement_lines(&self) -> Vec<u32> {
-        self.statements.iter().map(|s| s.line).collect()
-    }
+    // /// Return the exact line numbers that have statements (for display).
+    // pub fn statement_lines(&self) -> Vec<u32> {
+    //     self.statements.iter().map(|s| s.line).collect()
+    // }
 }
