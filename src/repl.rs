@@ -124,7 +124,7 @@ pub fn run_repl(dbg: &mut Debugger, source_text: &str) -> Result<()> {
                     continue;
                 }
                 match dbg.read_variable(var_name) {
-                    Ok(Some(v)) => println!("  {var_name} = {v}"),
+                    Ok(Some(v)) => println!("  {} = {} \n  {}` = {}", var_name, v.0, var_name, v.1),
                     Ok(None) => println!("  Unknown variable '{var_name}'"),
                     Err(e) => println!("  Error reading '{var_name}': {e}"),
                 }
@@ -142,7 +142,7 @@ pub fn run_repl(dbg: &mut Debugger, source_text: &str) -> Result<()> {
                 } else {
                     for (name, result) in &vars {
                         match result {
-                            Ok(v) => println!("  {name} = {v}"),
+                            Ok(v) => println!("  {} = {} \n  {}` = {}", name, v.0, name, v.1),
                             Err(e) => println!("  {name} = <error: {e}>"),
                         }
                     }

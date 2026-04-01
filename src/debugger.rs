@@ -299,14 +299,23 @@ impl Debugger {
 
     // ─── Variable inspection ─────────────────────────────────────────────────
 
-    pub fn read_variable(&self, name: &str) -> Result<Option<DplValue>> {
-        let entry = match self.source_map.variables.get(name) {
+    pub fn read_variable(&self, name: &str) -> Result<Option<(DplValue, DplValue)>> {
+        // Allow callers to pass either `x` or `x``; internally normalize to base name.
+        let base_name = name.strip_suffix('`').unwrap_or(name);
+
+        let entry = match self.source_map.variables.get(base_name) {
             Some(e) => e,
+            None => return Ok(None),
+        };
+        let primed_name = format!("{}`", base_name);
+        // If primed slot doesn't exist, return None (don't print this variable).
+        let primed_entry = match self.source_map.variables.get(&primed_name) {
+            Some(pe) => pe,
             None => return Ok(None),
         };
 
         let regs = ptrace::getregs(self.child)?;
-        // Variable lives at  rbp - rbp_offset  (offset is stored as positive i32).
+        // Variable lives at rbp - rbp_offset (offset is stored as positive i32).
         let addr = (regs.rbp as i64 - entry.rbp_offset as i64) as u64;
         let raw = ptrace::read(self.child, addr as ptrace::AddressType)?;
 
@@ -314,18 +323,27 @@ impl Debugger {
             VarKind::Int => DplValue::Int(raw as i64),
             VarKind::Float => DplValue::Float(f64::from_bits(raw as u64)),
         };
-        Ok(Some(value))
+
+        // Read the primed value from its own stack slot.
+        let primed_addr = (regs.rbp as i64 - primed_entry.rbp_offset as i64) as u64;
+        let primed_raw = ptrace::read(self.child, primed_addr as ptrace::AddressType)?;
+        let primed_value = match primed_entry.kind {
+            VarKind::Int => DplValue::Int(primed_raw as i64),
+            VarKind::Float => DplValue::Float(f64::from_bits(primed_raw as u64)),
+        };
+        Ok(Some((value, primed_value)))
     }
 
-    pub fn read_all_variables(&self) -> Vec<(String, Result<DplValue>)> {
-        let mut vars: Vec<(String, Result<DplValue>)> = self
+    pub fn read_all_variables(&self) -> Vec<(String, Result<(DplValue, DplValue)>)> {
+        let mut vars: Vec<(String, Result<(DplValue, DplValue)>)> = self
             .source_map
             .variables
             .keys()
+            .filter(|name| !name.ends_with('`'))
             .map(|name| {
                 let val = self
                     .read_variable(name)
-                    .map(|v| v.unwrap_or(DplValue::Int(0)));
+                    .and_then(|v| v.context("variable missing from source map"));
                 (name.clone(), val)
             })
             .collect();
