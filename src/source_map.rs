@@ -18,6 +18,7 @@ pub struct StmtEntry {
 pub enum VarKind {
     Int,
     Float,
+    String,
 }
 
 /// Stack location and type for one variable.

@@ -25,6 +25,7 @@ pub enum DebugEvent {
 pub enum DplValue {
     Int(i64),
     Float(f64),
+    String(String),
 }
 
 impl std::fmt::Display for DplValue {
@@ -32,6 +33,7 @@ impl std::fmt::Display for DplValue {
         match self {
             DplValue::Int(i) => write!(f, "{i}"),
             DplValue::Float(v) => write!(f, "{v}"),
+            DplValue::String(s) => write!(f, "{s}"),
         }
     }
 }
@@ -299,7 +301,7 @@ impl Debugger {
 
     // ─── Variable inspection ─────────────────────────────────────────────────
 
-    pub fn read_variable(&self, name: &str) -> Result<Option<(DplValue, DplValue)>> {
+    pub fn read_variable(&self, name: &str) -> Result<Option<(DplValue, Option<DplValue>)>> {
         // Allow callers to pass either `x` or `x``; internally normalize to base name.
         let base_name = name.strip_suffix('`').unwrap_or(name);
 
@@ -307,35 +309,27 @@ impl Debugger {
             Some(e) => e,
             None => return Ok(None),
         };
-        let primed_name = format!("{}`", base_name);
-        // If primed slot doesn't exist, return None (don't print this variable).
-        let primed_entry = match self.source_map.variables.get(&primed_name) {
-            Some(pe) => pe,
-            None => return Ok(None),
-        };
 
         let regs = ptrace::getregs(self.child)?;
         // Variable lives at rbp - rbp_offset (offset is stored as positive i32).
         let addr = (regs.rbp as i64 - entry.rbp_offset as i64) as u64;
-        let raw = ptrace::read(self.child, addr as ptrace::AddressType)?;
+        let value = self.read_value_for_kind(addr, &entry.kind)?;
 
-        let value = match entry.kind {
-            VarKind::Int => DplValue::Int(raw as i64),
-            VarKind::Float => DplValue::Float(f64::from_bits(raw as u64)),
+        // Primed slot may not exist for variables that are never prime-assigned.
+        let primed_name = format!("{}`", base_name);
+        let primed_value = if let Some(primed_entry) = self.source_map.variables.get(&primed_name)
+        {
+            let primed_addr = (regs.rbp as i64 - primed_entry.rbp_offset as i64) as u64;
+            Some(self.read_value_for_kind(primed_addr, &primed_entry.kind)?)
+        } else {
+            None
         };
 
-        // Read the primed value from its own stack slot.
-        let primed_addr = (regs.rbp as i64 - primed_entry.rbp_offset as i64) as u64;
-        let primed_raw = ptrace::read(self.child, primed_addr as ptrace::AddressType)?;
-        let primed_value = match primed_entry.kind {
-            VarKind::Int => DplValue::Int(primed_raw as i64),
-            VarKind::Float => DplValue::Float(f64::from_bits(primed_raw as u64)),
-        };
         Ok(Some((value, primed_value)))
     }
 
-    pub fn read_all_variables(&self) -> Vec<(String, Result<(DplValue, DplValue)>)> {
-        let mut vars: Vec<(String, Result<(DplValue, DplValue)>)> = self
+    pub fn read_all_variables(&self) -> Vec<(String, Result<(DplValue, Option<DplValue>)>)> {
+        let mut vars: Vec<(String, Result<(DplValue, Option<DplValue>)>)> = self
             .source_map
             .variables
             .keys()
@@ -350,5 +344,51 @@ impl Debugger {
         // Sort alphabetically for stable output.
         vars.sort_by(|a, b| a.0.cmp(&b.0));
         vars
+    }
+
+    fn read_value_for_kind(&self, stack_addr: u64, kind: &VarKind) -> Result<DplValue> {
+        let raw = ptrace::read(self.child, stack_addr as ptrace::AddressType)?;
+        let value = match kind {
+            VarKind::Int => DplValue::Int(raw as i64),
+            VarKind::Float => DplValue::Float(f64::from_bits(raw as u64)),
+            VarKind::String => {
+                let ptr = raw as u64;
+                DplValue::String(self.read_c_string(ptr, 4096)?)
+            }
+        };
+        Ok(value)
+    }
+
+    fn read_c_string(&self, addr: u64, max_len: usize) -> Result<String> {
+        if addr == 0 {
+            return Ok("<null>".to_string());
+        }
+
+        // Read memory in aligned machine words and extract bytes locally.
+        // This avoids issuing potentially unsafe unaligned ptrace reads.
+        let word_size = std::mem::size_of::<usize>() as u64;
+        let word_mask = !(word_size - 1);
+
+        let mut bytes = Vec::new();
+        let mut cached_word_addr: Option<u64> = None;
+        let mut cached_word: u64 = 0;
+
+        for i in 0..max_len {
+            let byte_addr = addr + i as u64;
+            let aligned_addr = byte_addr & word_mask;
+
+            if cached_word_addr != Some(aligned_addr) {
+                cached_word = ptrace::read(self.child, aligned_addr as ptrace::AddressType)? as u64;
+                cached_word_addr = Some(aligned_addr);
+            }
+
+            let byte_index = (byte_addr - aligned_addr) as u32;
+            let b = ((cached_word >> (byte_index * 8)) & 0xFF) as u8;
+            if b == 0 {
+                break;
+            }
+            bytes.push(b);
+        }
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
 }

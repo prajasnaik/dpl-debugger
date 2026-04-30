@@ -124,7 +124,12 @@ pub fn run_repl(dbg: &mut Debugger, source_text: &str) -> Result<()> {
                     continue;
                 }
                 match dbg.read_variable(var_name) {
-                    Ok(Some(v)) => println!("  {} = {} \n  {}` = {}", var_name, v.0, var_name, v.1),
+                    Ok(Some((value, primed))) => {
+                        println!("  {} = {}", var_name, value);
+                        if let Some(p) = primed {
+                            println!("  {}` = {}", var_name, p);
+                        }
+                    }
                     Ok(None) => println!("  Unknown variable '{var_name}'"),
                     Err(e) => println!("  Error reading '{var_name}': {e}"),
                 }
@@ -142,7 +147,12 @@ pub fn run_repl(dbg: &mut Debugger, source_text: &str) -> Result<()> {
                 } else {
                     for (name, result) in &vars {
                         match result {
-                            Ok(v) => println!("  {} = {} \n  {}` = {}", name, v.0, name, v.1),
+                            Ok((value, primed)) => {
+                                println!("  {} = {}", name, value);
+                                if let Some(p) = primed {
+                                    println!("  {}` = {}", name, p);
+                                }
+                            }
                             Err(e) => println!("  {name} = <error: {e}>"),
                         }
                     }
